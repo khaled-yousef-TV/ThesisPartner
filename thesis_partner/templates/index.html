@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Thesis Partner</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="app-shell">
+    <aside class="binder" aria-label="Thesis binder">
+      <h1 class="app-title">Thesis Partner</h1>
+      <p class="binder-note">Binder mirrors Paper, Front matter, and Research. Research items are not for final compile unless they become appendices.</p>
+      {% macro tree(nodes) -%}
+      <ul class="tree">
+        {%- for n in nodes %}
+        <li>
+          {%- if n.path %}<span>{{ n.label }}</span>{% else %}<strong>{{ n.label }}</strong>{% endif -%}
+          {%- if n.children %}{{ tree(n.children) }}{% endif %}
+        </li>
+        {%- endfor %}
+      </ul>
+      {%- endmacro %}
+
+      {% for root in sidebar_tree %}
+      <details class="binder-root" open>
+        <summary>
+          {{ root.label }}
+          {% if root.compiles %}
+          <span class="badge badge-compile">compile</span>
+          {% else %}
+          <span class="badge badge-research">research</span>
+          {% endif %}
+        </summary>
+        {% if root.note %}<p class="binder-note">{{ root.note }}</p>{% endif %}
+        {{ tree(root.children) }}
+      </details>
+      {% endfor %}
+    </aside>
+
+    <main id="main" class="workspace">
+      <div class="tabs" role="tablist" aria-label="Workspace">
+        <button type="button" class="tab" role="tab" aria-selected="true" data-tab="analyze">Analyze draft</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="chat">Claude chat</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="memory">Add to memory</button>
+      </div>
+
+      <section id="panel-analyze" class="panel active" role="tabpanel" aria-label="Analyze draft">
+        <h2>Analyze pasted text</h2>
+        <p class="binder-note">Grammar, APA 7th, fit with stored thesis context (Claude), and AI scan (GPTZero).</p>
+        <form id="analyze-form">
+          <div class="field">
+            <label for="section-path">Section</label>
+            <select id="section-path" name="section_path" required>
+              {% for group_label, options in section_groups %}
+              <optgroup label="{{ group_label }}">
+                {% for value, label in options %}
+                <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </optgroup>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="draft-note">Optional note</label>
+            <input type="text" id="draft-note" name="note" maxlength="500" placeholder="What changed in this draft?" />
+          </div>
+          <div class="field">
+            <label for="draft-text">Draft text</label>
+            <textarea id="draft-text" name="text" required maxlength="80000" placeholder="Paste your section here…"></textarea>
+            <p class="binder-note" id="grammar-fix-hint">Quick grammar fix uses Claude on the current draft (max 12,000 characters) and replaces the text — use Ctrl+Z to undo.</p>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="primary" id="analyze-submit">Run checks</button>
+            <button type="button" class="secondary" id="grammar-fix-btn">Quick grammar fix</button>
+            <span class="status" id="analyze-status" role="status"></span>
+          </div>
+        </form>
+        <div id="analyze-results" class="results" style="margin-top:1.5rem;"></div>
+      </section>
+
+      <section id="panel-chat" class="panel" role="tabpanel" hidden aria-label="Claude chat">
+        <h2>Chat with Claude</h2>
+        <p class="binder-note">Messages are saved to thesis memory for later theme alignment.</p>
+        <div id="chat-log" class="chat-log" aria-live="polite"></div>
+        <form id="chat-form">
+          <div class="field">
+            <label for="chat-input">Message</label>
+            <textarea id="chat-input" maxlength="16000" required placeholder="Ask about structure, argument, or next steps…"></textarea>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="primary" id="chat-submit">Send</button>
+            <span class="status" id="chat-status" role="status"></span>
+          </div>
+        </form>
+      </section>
+
+      <section id="panel-memory" class="panel" role="tabpanel" hidden aria-label="Add to memory">
+        <h2>Add excerpt to thesis memory</h2>
+        <p class="binder-note">Paste distilled ideas from external Claude conversations or notes.</p>
+        <form id="memory-form">
+          <div class="field">
+            <label for="memory-section">Section (optional)</label>
+            <select id="memory-section" name="section_path">
+              <option value="">(not tied to a section)</option>
+              {% for group_label, options in section_groups %}
+              <optgroup label="{{ group_label }}">
+                {% for value, label in options %}
+                <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </optgroup>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="memory-content">Content</label>
+            <textarea id="memory-content" maxlength="32000" required></textarea>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="primary">Save to memory</button>
+            <button type="button" class="secondary" id="brief-refresh">Refresh thesis brief</button>
+            <span class="status" id="memory-status" role="status"></span>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const tabs = document.querySelectorAll(".tab");
+    const panels = {
+      analyze: document.getElementById("panel-analyze"),
+      chat: document.getElementById("panel-chat"),
+      memory: document.getElementById("panel-memory"),
+    };
+
+    function activateTab(name) {
+      tabs.forEach((btn) => {
+        const on = btn.dataset.tab === name;
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      Object.entries(panels).forEach(([key, el]) => {
+        const on = key === name;
+        el.classList.toggle("active", on);
+        el.hidden = !on;
+      });
+    }
+
+    tabs.forEach((btn) => {
+      btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+    });
+
+    function esc(s) {
+      return s.replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[c]));
+    }
+
+    function renderCheckItems(title, items, kind) {
+      if (!Array.isArray(items) || !items.length) {
+        return `<details><summary>${esc(title)}</summary><p class="binder-note">No items returned.</p></details>`;
+      }
+      const body = items
+        .map((it) => {
+          if (!it || typeof it !== "object") {
+            return `<li class="check-item"><p>${esc(String(it))}</p></li>`;
+          }
+          if (kind === "grammar") {
+            const sev = esc(it.severity || "note");
+            const msg = esc(it.message || "");
+            const ex = it.excerpt ? `<blockquote class="excerpt">${esc(it.excerpt)}</blockquote>` : "";
+            return `<li class="check-item"><span class="severity severity-${esc((it.severity || "note").toLowerCase())}">${sev}</span><p class="check-msg">${msg}</p>${ex}</li>`;
+          }
+          const issue = esc(it.issue || it.message || "");
+          const sug = it.suggestion ? `<p class="check-suggestion"><strong>Suggestion:</strong> ${esc(it.suggestion)}</p>` : "";
+          const ex = it.excerpt ? `<blockquote class="excerpt">${esc(it.excerpt)}</blockquote>` : "";
+          return `<li class="check-item"><p class="check-msg">${issue}</p>${sug}${ex}</li>`;
+        })
+        .join("");
+      return `<details open><summary>${esc(title)}</summary><ul class="check-list">${body}</ul></details>`;
+    }
+
+    function renderGPTZero(gz) {
+      if (!gz || typeof gz !== "object") {
+        return `<details><summary>AI scan (GPTZero)</summary><p class="binder-note">No response.</p></details>`;
+      }
+      if (gz.ok === false) {
+        return `<details open><summary>AI scan (GPTZero)</summary><p class="check-error">${esc(gz.error || "Request failed")}</p></details>`;
+      }
+      const s = gz.summary && typeof gz.summary === "object" ? gz.summary : {};
+      const rows = [];
+      const pct = (x) => (typeof x === "number" ? `${Math.round(x * 1000) / 10}%` : esc(String(x)));
+      if (s.completely_generated_prob != null) rows.push(`<tr><th>Estimated AI-generated</th><td>${pct(s.completely_generated_prob)}</td></tr>`);
+      if (s.average_generated_prob != null) rows.push(`<tr><th>Average segment score</th><td>${pct(s.average_generated_prob)}</td></tr>`);
+      if (s.predicted_class != null) rows.push(`<tr><th>Classification</th><td>${esc(String(s.predicted_class))}</td></tr>`);
+      if (s.confidence_score != null) rows.push(`<tr><th>Confidence</th><td>${esc(String(s.confidence_score))}</td></tr>`);
+      const table =
+        rows.length > 0
+          ? `<table class="gz-table" aria-label="GPTZero summary"><tbody>${rows.join("")}</tbody></table>`
+          : `<p class="binder-note">No summary fields returned; expand raw response for details.</p>`;
+      const raw = `<details class="raw-wrap"><summary>Raw API response (debug)</summary><pre class="pre-json">${esc(JSON.stringify(gz.raw != null ? gz.raw : gz, null, 2))}</pre></details>`;
+      return `<details open><summary>AI scan (GPTZero)</summary>${table}${raw}</details>`;
+    }
+
+    function renderTheme(theme) {
+      if (!theme || typeof theme !== "object") {
+        return `<details><summary>Theme fit</summary><p class="binder-note">No theme object.</p></details>`;
+      }
+      const parts = [];
+      if (theme.summary) parts.push(`<p>${esc(theme.summary)}</p>`);
+      ["strengths", "gaps", "suggestions"].forEach((k) => {
+        if (Array.isArray(theme[k]) && theme[k].length) {
+          parts.push(`<h4>${esc(k)}</h4><ul>${theme[k].map((x) => `<li>${esc(String(x))}</li>`).join("")}</ul>`);
+        }
+      });
+      return `<details open><summary>Theme fit</summary>${parts.join("")}</details>`;
+    }
+
+    const analyzeForm = document.getElementById("analyze-form");
+    const analyzeStatus = document.getElementById("analyze-status");
+    const analyzeResults = document.getElementById("analyze-results");
+
+    function setAnalyzeBusy(on) {
+      document.getElementById("analyze-submit").disabled = on;
+      document.getElementById("grammar-fix-btn").disabled = on;
+    }
+
+    document.getElementById("grammar-fix-btn").addEventListener("click", async () => {
+      const ta = document.getElementById("draft-text");
+      const txt = ta.value;
+      if (!txt.trim()) {
+        analyzeStatus.textContent = "Add text to fix first.";
+        return;
+      }
+      analyzeStatus.textContent = "Fixing grammar…";
+      setAnalyzeBusy(true);
+      try {
+        const res = await fetch("/api/grammar-fix", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: txt }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const d = data.detail;
+          analyzeStatus.textContent =
+            typeof d === "string" ? d : JSON.stringify(d || {}) || res.statusText || "Request failed";
+          return;
+        }
+        ta.value = data.text || "";
+        analyzeStatus.textContent = "Draft replaced with corrected text (Ctrl+Z to undo).";
+      } catch (err) {
+        analyzeStatus.textContent = String(err);
+      } finally {
+        setAnalyzeBusy(false);
+      }
+    });
+
+    analyzeForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      analyzeStatus.textContent = "Running…";
+      analyzeResults.innerHTML = "";
+      const payload = {
+        section_path: document.getElementById("section-path").value,
+        note: document.getElementById("draft-note").value || null,
+        text: document.getElementById("draft-text").value,
+      };
+      setAnalyzeBusy(true);
+      try {
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const d = data.detail;
+          analyzeStatus.textContent =
+            typeof d === "string" ? d : JSON.stringify(d || {}) || res.statusText || "Request failed";
+          return;
+        }
+        analyzeStatus.textContent = "Done.";
+        const cl = data.claude || {};
+        const gz = data.gptzero || {};
+        let html = "";
+        if (cl.ok && cl.data) {
+          html += renderCheckItems("Grammar", cl.data.grammar, "grammar");
+          html += renderCheckItems("APA 7th", cl.data.apa7, "apa");
+          if (cl.grammar_warning) {
+            html += `<p class="binder-note check-error" role="alert">${esc(cl.grammar_warning)}</p>`;
+          }
+          if (cl.apa_warning) {
+            html += `<p class="binder-note check-error" role="alert">${esc(cl.apa_warning)}</p>`;
+          }
+          if (cl.theme_warning) {
+            html += `<p class="binder-note check-error" role="alert">${esc(cl.theme_warning)}</p>`;
+          }
+          html += renderTheme(cl.data.theme);
+          html += `<details open><summary>Section notes</summary><p class="section-notes">${esc(cl.data.sectionNotes || "")}</p></details>`;
+        } else {
+          const err = cl.error ? `<p class="check-error">${esc(cl.error)}</p>` : "";
+          html += `<details open><summary>Claude</summary>${err}<details class="raw-wrap"><summary>Technical details</summary><pre class="pre-json">${esc(JSON.stringify(cl, null, 2))}</pre></details></details>`;
+        }
+        html += renderGPTZero(gz);
+        if (typeof data.analysis_id === "number") {
+          html += `<p class="binder-note">Saved as analysis #${data.analysis_id}</p>`;
+        }
+        analyzeResults.innerHTML = html;
+      } catch (err) {
+        analyzeStatus.textContent = String(err);
+      } finally {
+        setAnalyzeBusy(false);
+      }
+    });
+
+    const chatForm = document.getElementById("chat-form");
+    const chatLog = document.getElementById("chat-log");
+    const chatStatus = document.getElementById("chat-status");
+
+    function appendMessage(role, text) {
+      const wrap = document.createElement("div");
+      wrap.className = "msg " + (role === "user" ? "user" : "assistant");
+      wrap.innerHTML =
+        '<div class="msg-role">' +
+        esc(role) +
+        "</div><div>" +
+        esc(text).replace(/\n/g, "<br/>") +
+        "</div>";
+      chatLog.appendChild(wrap);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    chatForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = document.getElementById("chat-input");
+      const msg = input.value.trim();
+      if (!msg) return;
+      appendMessage("user", msg);
+      input.value = "";
+      chatStatus.textContent = "Thinking…";
+      const btn = document.getElementById("chat-submit");
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: msg }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const d = data.detail;
+          chatStatus.textContent = typeof d === "string" ? d : JSON.stringify(d || {}) || res.statusText;
+          return;
+        }
+        chatStatus.textContent = "";
+        appendMessage("assistant", data.reply || "");
+      } catch (err) {
+        chatStatus.textContent = String(err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    const memoryForm = document.getElementById("memory-form");
+    const memoryStatus = document.getElementById("memory-status");
+
+    memoryForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      memoryStatus.textContent = "Saving…";
+      const section = document.getElementById("memory-section").value;
+      const content = document.getElementById("memory-content").value;
+      try {
+        const res = await fetch("/api/memory", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ section_path: section || null, content }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const d = data.detail;
+          memoryStatus.textContent = typeof d === "string" ? d : JSON.stringify(d || {}) || res.statusText;
+          return;
+        }
+        memoryStatus.textContent = "Saved.";
+        memoryForm.reset();
+      } catch (err) {
+        memoryStatus.textContent = String(err);
+      }
+    });
+
+    document.getElementById("brief-refresh").addEventListener("click", async () => {
+      memoryStatus.textContent = "Refreshing brief…";
+      try {
+        const res = await fetch("/api/brief/refresh", { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const d = data.detail;
+          memoryStatus.textContent = typeof d === "string" ? d : JSON.stringify(d || {}) || res.statusText;
+          return;
+        }
+        memoryStatus.textContent = "Brief updated.";
+      } catch (err) {
+        memoryStatus.textContent = String(err);
+      }
+    });
+  </script>
+</body>
+</html>

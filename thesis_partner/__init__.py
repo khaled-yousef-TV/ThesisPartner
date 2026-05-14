@@ -1,0 +1,1 @@
+"""Thesis Partner web application."""
