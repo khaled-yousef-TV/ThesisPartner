@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS context_brief (
   brief TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS section_drafts (
+  section_path TEXT PRIMARY KEY,
+  text_content TEXT NOT NULL,
+  note TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

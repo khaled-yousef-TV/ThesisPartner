@@ -30,4 +30,4 @@ where = ["."]
 include = ["thesis_partner*"]
 
 [tool.setuptools.package-data]
-thesis_partner = ["templates/*.html", "static/*.css"]
+thesis_partner = ["templates/*.html", "templates/**/*.html", "static/*.css"]

@@ -1,6 +1,6 @@
 # Thesis Partner
 
-Local web app for a Masters thesis workflow: **binder-style navigation**, **paste-and-analyze** (grammar, APA 7th, thematic fit via **Claude**), **AI scan** via **GPTZero**, and **thesis memory** from pasted excerpts plus **in-app Claude chat**.
+Local web app for a Masters thesis workflow: **binder-style navigation** (linked section pages showing each section’s latest saved draft after analyze), **paste-and-analyze** (APA via **Claude**, **GPTZero** AI scan only on current paste), **on-demand theme fit** (Claude sees all saved section drafts plus thesis memory), thesis memory **paste + chat**, and **research brief**.
 
 ## Requirements
 

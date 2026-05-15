@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterator
+from urllib.parse import quote
 
 # Value format: "Paper>Section>..." joined with ">" for storage and API.
 
@@ -110,3 +111,37 @@ SIDEBAR_TREE: list[dict[str, Any]] = [
         ],
     },
 ]
+
+
+def section_path_labels() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for _, opts in SECTION_GROUPS:
+        for value, label in opts:
+            out[value] = label
+    return out
+
+
+def iter_leaf_paths(nodes: list[dict[str, Any]]) -> Iterator[str]:
+    for n in nodes:
+        p = n.get("path")
+        if isinstance(p, str) and p.strip():
+            yield p
+        ch = n.get("children")
+        if isinstance(ch, list):
+            yield from iter_leaf_paths(ch)
+
+
+def all_section_paths_ordered() -> list[str]:
+    """Binder order: depth-firstwalk of SIDEBAR_TREE leaves."""
+    return list(iter_leaf_paths(SIDEBAR_TREE))
+
+
+VALID_SECTION_PATHS: frozenset[str] = frozenset(section_path_labels().keys())
+
+
+def section_href(path: str) -> str:
+    return "/section/" + quote(path, safe="")
+
+
+def section_label(section_path: str) -> str:
+    return section_path_labels().get(section_path, section_path)

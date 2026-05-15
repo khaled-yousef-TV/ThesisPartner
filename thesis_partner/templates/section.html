@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ section_label_title }} · Thesis Partner</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="app-shell">
+    {% set active_section_path = section_path %}
+    {% include "partials/binder_sidebar.html" %}
+    <main id="main" class="workspace section-page">
+      <p class="binder-note"><a href="/">← Back to workspace</a></p>
+      <h1>{{ section_label_title }}</h1>
+      {% if draft_empty %}
+      <p class="binder-note">No draft submitted yet for this section. Paste text under <strong>Analyze draft</strong> and choose this section.</p>
+      {% else %}
+      {% if draft_note %}<p class="binder-note">Last note when saved: {{ draft_note }}</p>{% endif %}
+      <p class="binder-note-meta">Updated {{ draft_updated or "—" }}</p>
+      <article class="section-draft-readonly" aria-label="Latest draft for this section">
+        <pre>{{ draft_text }}</pre>
+      </article>
+      {% endif %}
+    </main>
+  </div>
+</body>
+</html>

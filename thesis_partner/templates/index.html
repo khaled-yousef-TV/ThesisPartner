@@ -9,46 +9,31 @@
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="app-shell">
-    <aside class="binder" aria-label="Thesis binder">
-      <h1 class="app-title">Thesis Partner</h1>
-      <p class="binder-note">Binder mirrors Paper, Front matter, and Research. Research items are not for final compile unless they become appendices.</p>
-      {% macro tree(nodes) -%}
-      <ul class="tree">
-        {%- for n in nodes %}
-        <li>
-          {%- if n.path %}<span>{{ n.label }}</span>{% else %}<strong>{{ n.label }}</strong>{% endif -%}
-          {%- if n.children %}{{ tree(n.children) }}{% endif %}
-        </li>
-        {%- endfor %}
-      </ul>
-      {%- endmacro %}
-
-      {% for root in sidebar_tree %}
-      <details class="binder-root" open>
-        <summary>
-          {{ root.label }}
-          {% if root.compiles %}
-          <span class="badge badge-compile">compile</span>
-          {% else %}
-          <span class="badge badge-research">research</span>
-          {% endif %}
-        </summary>
-        {% if root.note %}<p class="binder-note">{{ root.note }}</p>{% endif %}
-        {{ tree(root.children) }}
-      </details>
-      {% endfor %}
-    </aside>
+    {% set active_section_path = none %}
+    {% include "partials/binder_sidebar.html" %}
 
     <main id="main" class="workspace">
-      <div class="tabs" role="tablist" aria-label="Workspace">
-        <button type="button" class="tab" role="tab" aria-selected="true" data-tab="analyze">Analyze draft</button>
-        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="chat">Claude chat</button>
-        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="memory">Add to memory</button>
+      <div class="workspace-top">
+        <div class="tabs" role="tablist" aria-label="Workspace">
+          <button type="button" class="tab" role="tab" aria-selected="true" data-tab="analyze">Analyze draft</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="chat">Claude chat</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="memory">Add to memory</button>
+        </div>
+        <div class="theme-fit-bar">
+          <button type="button" class="theme-fit-cta" id="theme-fit-btn">Run theme fit</button>
+          <span id="theme-fit-status" class="theme-fit-status" role="status"></span>
+        </div>
       </div>
+
+      <div id="theme-fit-results" class="results theme-fit-results workspace-theme-results" aria-live="polite"></div>
 
       <section id="panel-analyze" class="panel active" role="tabpanel" aria-label="Analyze draft">
         <h2>Analyze pasted text</h2>
-        <p class="binder-note">Grammar, APA 7th, fit with stored thesis context (Claude), and AI scan (GPTZero).</p>
+        <p class="binder-note">
+          APA 7th (Claude) and AI scan (GPTZero) apply to this paste only. Binder links lead to each section’s
+          latest saved draft. <strong>Run theme fit</strong> sends all saved drafts plus thesis memory (brief, memory
+          entries, chat) to Claude — on demand only.
+        </p>
         <form id="analyze-form">
           <div class="field">
             <label for="section-path">Section</label>
@@ -69,11 +54,9 @@
           <div class="field">
             <label for="draft-text">Draft text</label>
             <textarea id="draft-text" name="text" required maxlength="80000" placeholder="Paste your section here…"></textarea>
-            <p class="binder-note" id="grammar-fix-hint">Quick grammar fix uses Claude on the current draft (max 12,000 characters) and replaces the text — use Ctrl+Z to undo.</p>
           </div>
           <div class="btn-row">
             <button type="submit" class="primary" id="analyze-submit">Run checks</button>
-            <button type="button" class="secondary" id="grammar-fix-btn">Quick grammar fix</button>
             <span class="status" id="analyze-status" role="status"></span>
           </div>
         </form>
@@ -161,7 +144,7 @@
       }[c]));
     }
 
-    function renderCheckItems(title, items, kind) {
+    function renderCheckItems(title, items) {
       if (!Array.isArray(items) || !items.length) {
         return `<details><summary>${esc(title)}</summary><p class="binder-note">No items returned.</p></details>`;
       }
@@ -169,12 +152,6 @@
         .map((it) => {
           if (!it || typeof it !== "object") {
             return `<li class="check-item"><p>${esc(String(it))}</p></li>`;
-          }
-          if (kind === "grammar") {
-            const sev = esc(it.severity || "note");
-            const msg = esc(it.message || "");
-            const ex = it.excerpt ? `<blockquote class="excerpt">${esc(it.excerpt)}</blockquote>` : "";
-            return `<li class="check-item"><span class="severity severity-${esc((it.severity || "note").toLowerCase())}">${sev}</span><p class="check-msg">${msg}</p>${ex}</li>`;
           }
           const issue = esc(it.issue || it.message || "");
           const sug = it.suggestion ? `<p class="check-suggestion"><strong>Suggestion:</strong> ${esc(it.suggestion)}</p>` : "";
@@ -209,7 +186,7 @@
 
     function renderTheme(theme) {
       if (!theme || typeof theme !== "object") {
-        return `<details><summary>Theme fit</summary><p class="binder-note">No theme object.</p></details>`;
+        return `<details open><summary>Theme fit</summary><p class="binder-note">No theme data.</p></details>`;
       }
       const parts = [];
       if (theme.summary) parts.push(`<p>${esc(theme.summary)}</p>`);
@@ -224,38 +201,34 @@
     const analyzeForm = document.getElementById("analyze-form");
     const analyzeStatus = document.getElementById("analyze-status");
     const analyzeResults = document.getElementById("analyze-results");
+    const themeFitResults = document.getElementById("theme-fit-results");
+    const themeFitStatus = document.getElementById("theme-fit-status");
 
     function setAnalyzeBusy(on) {
       document.getElementById("analyze-submit").disabled = on;
-      document.getElementById("grammar-fix-btn").disabled = on;
+      document.getElementById("theme-fit-btn").disabled = on;
     }
 
-    document.getElementById("grammar-fix-btn").addEventListener("click", async () => {
-      const ta = document.getElementById("draft-text");
-      const txt = ta.value;
-      if (!txt.trim()) {
-        analyzeStatus.textContent = "Add text to fix first.";
-        return;
-      }
-      analyzeStatus.textContent = "Fixing grammar…";
+    document.getElementById("theme-fit-btn").addEventListener("click", async () => {
+      themeFitResults.innerHTML = "";
+      themeFitStatus.textContent = "Running theme fit…";
       setAnalyzeBusy(true);
       try {
-        const res = await fetch("/api/grammar-fix", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: txt }),
-        });
+        const res = await fetch("/api/theme-fit", { method: "POST" });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           const d = data.detail;
-          analyzeStatus.textContent =
+          themeFitStatus.textContent =
             typeof d === "string" ? d : JSON.stringify(d || {}) || res.statusText || "Request failed";
           return;
         }
-        ta.value = data.text || "";
-        analyzeStatus.textContent = "Draft replaced with corrected text (Ctrl+Z to undo).";
+        themeFitStatus.textContent = "";
+        const d = data.data || {};
+        let html = renderTheme(d.theme || {});
+        html += `<details open><summary>Cross-section notes</summary><p class="section-notes">${esc(d.sectionNotes || "")}</p></details>`;
+        themeFitResults.innerHTML = html;
       } catch (err) {
-        analyzeStatus.textContent = String(err);
+        themeFitStatus.textContent = String(err);
       } finally {
         setAnalyzeBusy(false);
       }
@@ -264,7 +237,9 @@
     analyzeForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       analyzeStatus.textContent = "Running…";
+      themeFitStatus.textContent = "";
       analyzeResults.innerHTML = "";
+      themeFitResults.innerHTML = "";
       const payload = {
         section_path: document.getElementById("section-path").value,
         note: document.getElementById("draft-note").value || null,
@@ -289,22 +264,13 @@
         const gz = data.gptzero || {};
         let html = "";
         if (cl.ok && cl.data) {
-          html += renderCheckItems("Grammar", cl.data.grammar, "grammar");
-          html += renderCheckItems("APA 7th", cl.data.apa7, "apa");
-          if (cl.grammar_warning) {
-            html += `<p class="binder-note check-error" role="alert">${esc(cl.grammar_warning)}</p>`;
-          }
+          html += renderCheckItems("APA 7th", cl.data.apa7);
           if (cl.apa_warning) {
             html += `<p class="binder-note check-error" role="alert">${esc(cl.apa_warning)}</p>`;
           }
-          if (cl.theme_warning) {
-            html += `<p class="binder-note check-error" role="alert">${esc(cl.theme_warning)}</p>`;
-          }
-          html += renderTheme(cl.data.theme);
-          html += `<details open><summary>Section notes</summary><p class="section-notes">${esc(cl.data.sectionNotes || "")}</p></details>`;
         } else {
           const err = cl.error ? `<p class="check-error">${esc(cl.error)}</p>` : "";
-          html += `<details open><summary>Claude</summary>${err}<details class="raw-wrap"><summary>Technical details</summary><pre class="pre-json">${esc(JSON.stringify(cl, null, 2))}</pre></details></details>`;
+          html += `<details open><summary>APA check (Claude)</summary>${err}<details class="raw-wrap"><summary>Technical details</summary><pre class="pre-json">${esc(JSON.stringify(cl, null, 2))}</pre></details></details>`;
         }
         html += renderGPTZero(gz);
         if (typeof data.analysis_id === "number") {

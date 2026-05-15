@@ -18,10 +18,6 @@ class MemoryRequest(BaseModel):
     section_path: str | None = Field(None, max_length=500)
 
 
-class GrammarFixRequest(BaseModel):
-    text: str = Field(..., max_length=80_000)
-
-
 class AnalyzeResponse(BaseModel):
     claude: dict[str, Any]
     gptzero: dict[str, Any]

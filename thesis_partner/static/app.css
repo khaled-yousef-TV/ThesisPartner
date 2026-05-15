@@ -30,6 +30,10 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+
+  button.theme-fit-cta:not(:disabled):hover {
+    transform: none;
+  }
 }
 
 *,
@@ -155,6 +159,67 @@ main.workspace {
   flex: 1;
   padding: var(--space-xl);
   max-width: 1200px;
+}
+
+.workspace-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.workspace-top .tabs {
+  margin-bottom: 0;
+}
+
+.theme-fit-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-xs);
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+button.theme-fit-cta {
+  background: var(--color-cta);
+  color: #fff;
+  border: none;
+  padding: 18px 32px;
+  border-radius: var(--radius-lg);
+  font-weight: 700;
+  font-size: 1.125rem;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  transition: transform var(--transition), box-shadow var(--transition), opacity var(--transition);
+  white-space: nowrap;
+}
+
+button.theme-fit-cta:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: var(--shadow-sm);
+}
+
+button.theme-fit-cta:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(249, 115, 22, 0.38);
+}
+
+.theme-fit-status {
+  font-size: 0.82rem;
+  color: color-mix(in srgb, var(--color-text) 80%, transparent);
+  text-align: right;
+  max-width: min(280px, 100%);
+  line-height: 1.35;
+}
+
+.workspace-theme-results {
+  margin-bottom: var(--space-lg);
 }
 
 .tabs {
@@ -460,4 +525,50 @@ button.secondary:hover {
 
 .raw-wrap {
   margin-top: var(--space-md);
+}
+
+.binder .app-title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.binder .app-title a:hover {
+  text-decoration: underline;
+}
+
+.binder-leaf-link.is-active {
+  font-weight: 700;
+}
+
+.binder-node-label {
+  font-weight: 600;
+}
+
+main.section-page .section-draft-readonly {
+  margin-top: var(--space-md);
+  background: color-mix(in srgb, var(--color-background) 80%, white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.section-draft-readonly pre {
+  margin: 0;
+  font-family: inherit;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+.binder-note-meta {
+  font-size: 0.8rem;
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+  margin-bottom: var(--space-md);
+}
+
+.theme-fit-results h4 {
+  font-family: "Crimson Pro", Georgia, serif;
+  font-size: 1rem;
+  margin: var(--space-md) 0 var(--space-sm);
 }

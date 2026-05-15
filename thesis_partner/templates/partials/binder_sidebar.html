@@ -1,0 +1,33 @@
+{# Expects globals: section_href. Context: sidebar_tree, active_section_path (optional). #}
+{% macro tree(nodes) -%}
+<ul class="tree">
+  {%- for n in nodes %}
+  <li>
+    {%- if n.path %}
+    <a href="{{ section_href(n.path) }}" class="binder-leaf-link{% if active_section_path == n.path %} is-active{% endif %}">{{ n.label }}</a>
+    {%- else %}<strong class="binder-node-label">{{ n.label }}</strong>{% endif %}
+    {%- if n.children %}{{ tree(n.children) }}{% endif %}
+  </li>
+  {%- endfor %}
+</ul>
+{%- endmacro %}
+
+<aside class="binder" aria-label="Thesis binder">
+  <h1 class="app-title"><a href="/">Thesis Partner</a></h1>
+  <p class="binder-note">Binder mirrors Paper, Front matter, and Research. Research items are not for final compile unless they become appendices.</p>
+
+  {% for root in sidebar_tree %}
+  <details class="binder-root" open>
+    <summary>
+      {{ root.label }}
+      {% if root.compiles %}
+      <span class="badge badge-compile">compile</span>
+      {% else %}
+      <span class="badge badge-research">research</span>
+      {% endif %}
+    </summary>
+    {% if root.note %}<p class="binder-note">{{ root.note }}</p>{% endif %}
+    {{ tree(root.children) }}
+  </details>
+  {% endfor %}
+</aside>

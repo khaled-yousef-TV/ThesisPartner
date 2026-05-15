@@ -12,13 +12,21 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from thesis_partner import db as dbmod
-from thesis_partner.binder import SECTION_GROUPS, SIDEBAR_TREE
+from thesis_partner.binder import (
+    SECTION_GROUPS,
+    SIDEBAR_TREE,
+    VALID_SECTION_PATHS,
+    all_section_paths_ordered,
+    section_href,
+    section_label as binder_section_label,
+)
 from thesis_partner.config import Settings, get_settings
-from thesis_partner.schemas import AnalyzeRequest, AnalyzeResponse, ChatRequest, GrammarFixRequest, MemoryRequest
+from thesis_partner.schemas import AnalyzeRequest, AnalyzeResponse, ChatRequest, MemoryRequest
 from thesis_partner.services import claude, gptzero
 
 ROOT = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
+templates.env.globals["section_href"] = section_href
 
 
 @asynccontextmanager
@@ -67,6 +75,37 @@ def load_thesis_context(conn: sqlite3.Connection, memory_limit: int = 48) -> str
     return "\n\n---\n\n".join(chunks)
 
 
+def build_sections_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    paths: list[str],
+    max_chars_per_section: int,
+) -> str:
+    rows = {
+        r["section_path"]: r
+        for r in conn.execute(
+            "SELECT section_path, text_content, updated_at FROM section_drafts"
+        ).fetchall()
+    }
+    parts: list[str] = []
+    for path in paths:
+        label = binder_section_label(path)
+        row = rows.get(path)
+        if not row or not (row["text_content"] or "").strip():
+            parts.append(f"## {path} ({label})\n\n(No draft submitted yet.)")
+            continue
+        text = str(row["text_content"] or "")
+        truncated = False
+        if len(text) > max_chars_per_section:
+            text = text[:max_chars_per_section]
+            truncated = True
+        block = f"## {path} ({label})\n\n{text}"
+        if truncated:
+            block += f"\n\n[… truncated to {max_chars_per_section:,} characters …]"
+        parts.append(block)
+    return "\n\n---\n\n".join(parts)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -84,6 +123,35 @@ def index(request: Request) -> HTMLResponse:
     )
 
 
+@app.get("/section/{section_path:path}", response_class=HTMLResponse)
+def section_draft_view(
+    request: Request,
+    section_path: str,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> HTMLResponse:
+    normalized = section_path.strip()
+    if normalized not in VALID_SECTION_PATHS:
+        raise HTTPException(status_code=404, detail="Unknown binder section.")
+    row = conn.execute(
+        "SELECT text_content, note, updated_at FROM section_drafts WHERE section_path = ?",
+        (normalized,),
+    ).fetchone()
+    draft_empty = row is None or not (row["text_content"] or "").strip()
+    return templates.TemplateResponse(
+        request,
+        "section.html",
+        {
+            "sidebar_tree": SIDEBAR_TREE,
+            "section_path": normalized,
+            "section_label_title": binder_section_label(normalized),
+            "draft_empty": draft_empty,
+            "draft_text": "" if draft_empty else str(row["text_content"]),
+            "draft_note": None if draft_empty else (row["note"] or None),
+            "draft_updated": None if draft_empty else str(row["updated_at"] or ""),
+        },
+    )
+
+
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze(
     body: AnalyzeRequest,
@@ -93,7 +161,6 @@ async def analyze(
     if len(body.text) > settings.max_analyze_chars:
         raise HTTPException(status_code=400, detail="Text exceeds configured limit")
 
-    thesis_context = load_thesis_context(conn)
     gz_task = gptzero.scan_text(settings.gptzero_api_key, body.text)
     cl_task = claude.analyze_draft(
         api_key=settings.anthropic_api_key,
@@ -101,7 +168,6 @@ async def analyze(
         section_path=body.section_path,
         note=body.note,
         draft=body.text,
-        thesis_context=thesis_context,
     )
     gz_result, cl_result = await asyncio.gather(gz_task, cl_task)
 
@@ -122,33 +188,44 @@ async def analyze(
             json.dumps(gptzero_payload, ensure_ascii=False),
         ),
     )
+    cur.execute(
+        """
+        INSERT INTO section_drafts (section_path, text_content, note, updated_at)
+        VALUES (?, ?, ?, datetime('now'))
+        ON CONFLICT(section_path) DO UPDATE SET
+          text_content = excluded.text_content,
+          note = excluded.note,
+          updated_at = datetime('now')
+        """,
+        (body.section_path, body.text, body.note),
+    )
     conn.commit()
     analysis_id = int(cur.lastrowid)
 
     return AnalyzeResponse(claude=claude_payload, gptzero=gptzero_payload, analysis_id=analysis_id)
 
-@app.post("/api/grammar-fix")
-async def grammar_fix(
-    body: GrammarFixRequest,
+
+@app.post("/api/theme-fit")
+async def theme_fit(
+    conn: sqlite3.Connection = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
-    limit = settings.grammar_fix_max_chars
-    if len(body.text) > limit:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Quick grammar fix is limited to {limit:,} characters at once "
-                "(output length). Shorten the selection or run it on one section at a time."
-            ),
-        )
-    result = await claude.quick_grammar_fix(
+    paths = all_section_paths_ordered()
+    snapshot = build_sections_snapshot(
+        conn,
+        paths=paths,
+        max_chars_per_section=settings.max_theme_fit_section_chars,
+    )
+    thesis_memory = load_thesis_context(conn)
+    result = await claude.theme_fit_manuscript(
         api_key=settings.anthropic_api_key,
         model=settings.claude_model,
-        text=body.text,
+        sections_snapshot=snapshot,
+        thesis_memory=thesis_memory,
     )
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result.get("error", "Claude error"))
-    return JSONResponse({"ok": True, "text": str(result.get("text", ""))})
+    return JSONResponse(result)
 
 
 @app.post("/api/chat")
