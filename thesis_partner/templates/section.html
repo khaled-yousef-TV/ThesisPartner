@@ -14,6 +14,37 @@
     <main id="main" class="workspace section-page">
       <p class="binder-note"><a href="/">← Back to workspace</a></p>
       <h1>{{ section_label_title }}</h1>
+
+      <section class="section-suggest-panel" aria-labelledby="suggest-heading">
+        <div class="section-suggest-header">
+          <h2 id="suggest-heading">Section guidance</h2>
+          <div class="btn-row">
+            <button type="button" class="primary" id="suggest-btn">Suggest section</button>
+            <span class="status" id="suggest-status" role="status"></span>
+          </div>
+        </div>
+        <p class="binder-note">
+          Claude reads your other section drafts and thesis memory, then proposes an outline and next steps for this section.
+        </p>
+        <div id="suggest-results" class="results section-suggest-results" aria-live="polite"></div>
+      </section>
+
+      <section id="suggest-chat-panel" class="section-suggest-chat" hidden aria-labelledby="suggest-chat-heading">
+        <h2 id="suggest-chat-heading">Discuss this suggestion</h2>
+        <p class="binder-note">Chat stays on this page and uses the suggestion above as context.</p>
+        <div id="suggest-chat-log" class="chat-log" aria-live="polite"></div>
+        <form id="suggest-chat-form">
+          <div class="field">
+            <label for="suggest-chat-input">Message</label>
+            <textarea id="suggest-chat-input" maxlength="16000" required placeholder="Ask Claude to refine the outline, add examples, or clarify gaps…"></textarea>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="primary" id="suggest-chat-submit">Send</button>
+            <span class="status" id="suggest-chat-status" role="status"></span>
+          </div>
+        </form>
+      </section>
+
       {% if draft_empty %}
       <p class="binder-note">No draft submitted yet for this section. Paste text under <strong>Analyze draft</strong> and choose this section.</p>
       {% else %}
@@ -25,5 +56,165 @@
       {% endif %}
     </main>
   </div>
+
+  <script>
+    const SECTION_PATH = {{ section_path | tojson }};
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[c]));
+    }
+
+    let currentSuggestion = null;
+    const suggestChatHistory = [];
+
+    function renderSuggestion(data) {
+      if (!data || typeof data !== "object") {
+        return `<p class="binder-note">No suggestion returned.</p>`;
+      }
+      const parts = [];
+      if (data.summary) {
+        parts.push(`<p class="suggest-summary">${esc(data.summary)}</p>`);
+      }
+      if (Array.isArray(data.outline) && data.outline.length) {
+        const outlineHtml = data.outline
+          .map((block) => {
+            const heading = esc(block.heading || "Section");
+            const points = Array.isArray(block.points) && block.points.length
+              ? `<ul>${block.points.map((p) => `<li>${esc(String(p))}</li>`).join("")}</ul>`
+              : "";
+            return `<li><strong>${heading}</strong>${points}</li>`;
+          })
+          .join("");
+        parts.push(`<h3>Outline</h3><ol class="suggest-outline">${outlineHtml}</ol>`);
+      }
+      ["gapsToAddress", "connections", "nextSteps"].forEach((key) => {
+        const label = {
+          gapsToAddress: "Gaps to address",
+          connections: "Connections to other sections",
+          nextSteps: "Next steps",
+        }[key];
+        if (Array.isArray(data[key]) && data[key].length) {
+          parts.push(
+            `<h3>${esc(label)}</h3><ul>${data[key].map((x) => `<li>${esc(String(x))}</li>`).join("")}</ul>`
+          );
+        }
+      });
+      return parts.join("") || `<p class="binder-note">Empty suggestion.</p>`;
+    }
+
+    function appendSuggestMessage(role, text) {
+      const chatLog = document.getElementById("suggest-chat-log");
+      const wrap = document.createElement("div");
+      wrap.className = "msg " + (role === "user" ? "user" : "assistant");
+      wrap.innerHTML =
+        '<div class="msg-role">' +
+        esc(role) +
+        "</div><div>" +
+        esc(text).replace(/\n/g, "<br/>") +
+        "</div>";
+      chatLog.appendChild(wrap);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    document.getElementById("suggest-btn").addEventListener("click", async () => {
+      const status = document.getElementById("suggest-status");
+      const results = document.getElementById("suggest-results");
+      const chatPanel = document.getElementById("suggest-chat-panel");
+      const btn = document.getElementById("suggest-btn");
+
+      results.innerHTML = "";
+      chatPanel.hidden = true;
+      document.getElementById("suggest-chat-log").innerHTML = "";
+      suggestChatHistory.length = 0;
+      currentSuggestion = null;
+
+      status.textContent = "Generating suggestion…";
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/suggest-section", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ section_path: SECTION_PATH }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const d = data.detail;
+          status.textContent =
+            typeof d === "string" ? d : JSON.stringify(d || {}) || res.statusText || "Request failed";
+          return;
+        }
+        status.textContent = "";
+        currentSuggestion = data.data || {};
+        results.innerHTML = renderSuggestion(currentSuggestion);
+        chatPanel.hidden = false;
+        appendSuggestMessage(
+          "assistant",
+          "I've generated a section suggestion above. Ask me to refine the outline, expand a subsection, or adapt it to your argument."
+        );
+        suggestChatHistory.push({
+          role: "assistant",
+          content:
+            "I've generated a section suggestion above. Ask me to refine the outline, expand a subsection, or adapt it to your argument.",
+        });
+      } catch (err) {
+        status.textContent = String(err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById("suggest-chat-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!currentSuggestion) return;
+
+      const input = document.getElementById("suggest-chat-input");
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      appendSuggestMessage("user", msg);
+      suggestChatHistory.push({ role: "user", content: msg });
+      input.value = "";
+
+      const status = document.getElementById("suggest-chat-status");
+      const btn = document.getElementById("suggest-chat-submit");
+      status.textContent = "Thinking…";
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/suggest-section/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            section_path: SECTION_PATH,
+            message: msg,
+            suggestion: currentSuggestion,
+            history: suggestChatHistory.slice(0, -1),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const d = data.detail;
+          status.textContent =
+            typeof d === "string" ? d : JSON.stringify(d || {}) || res.statusText || "Request failed";
+          suggestChatHistory.pop();
+          return;
+        }
+        status.textContent = "";
+        const reply = data.reply || "";
+        appendSuggestMessage("assistant", reply);
+        suggestChatHistory.push({ role: "assistant", content: reply });
+      } catch (err) {
+        status.textContent = String(err);
+        suggestChatHistory.pop();
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
 </body>
 </html>

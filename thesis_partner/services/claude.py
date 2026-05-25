@@ -92,14 +92,70 @@ THEME_REVIEW_TOOL: dict[str, Any] = {
     },
 }
 
+SECTION_SUGGESTION_SYSTEM = """You are a thesis writing coach. The author wants guidance on ONE binder section based on what they have written so far. You MUST call the tool `return_section_suggestion` exactly once.
+
+You receive:
+- **target_section** — the section to advise on (path + label).
+- <<<TARGET_DRAFT>>> — latest draft for that section, or a note that none exists yet.
+- <<<SECTIONS_SNAPSHOT>>> — other section drafts in the manuscript.
+- <<<THESIS_MEMORY>>> — brief, pasted notes, chat excerpts.
+
+Produce practical, section-specific guidance:
+- **summary**: what this section should accomplish given the manuscript so far.
+- **outline**: ordered subsections or paragraphs with bullet points under each.
+- **gapsToAddress**: what is missing or weak relative to other sections and memory.
+- **connections**: how this section should link to specific other sections (cite paths when helpful).
+- **nextSteps**: concrete actions the author can take now.
+
+Ground advice in visible drafts and memory. If the manuscript is sparse, say so and give a sensible starter outline for the target section type. Do not invent quotations."""
+
+SECTION_SUGGESTION_TOOL: dict[str, Any] = {
+    "name": "return_section_suggestion",
+    "description": "Structured writing guidance for one thesis section.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "outline": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "heading": {"type": "string"},
+                        "points": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["heading", "points"],
+                },
+            },
+            "gapsToAddress": {"type": "array", "items": {"type": "string"}},
+            "connections": {"type": "array", "items": {"type": "string"}},
+            "nextSteps": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["summary", "outline", "gapsToAddress", "connections", "nextSteps"],
+    },
+}
+
 
 def _empty_theme() -> dict[str, Any]:
     return {"summary": "", "strengths": [], "gaps": [], "suggestions": []}
+
+
+def _strip_code_fence(text: str) -> str:
     s = text.strip()
     if s.startswith("```"):
         s = re.sub(r"^```[a-zA-Z0-9]*\s*\n", "", s)
         s = re.sub(r"\n```\s*$", "", s).strip()
     return s
+
+
+def _empty_section_suggestion() -> dict[str, Any]:
+    return {
+        "summary": "",
+        "outline": [],
+        "gapsToAddress": [],
+        "connections": [],
+        "nextSteps": [],
+    }
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
@@ -359,5 +415,99 @@ async def refresh_brief(
             messages=[{"role": "user", "content": prompt}],
         )
         return {"ok": True, "brief": _text_blocks(message)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+async def suggest_section(
+    *,
+    api_key: str,
+    model: str,
+    section_path: str,
+    section_label: str,
+    target_draft: str,
+    sections_snapshot: str,
+    thesis_memory: str,
+) -> dict[str, Any]:
+    if not api_key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY is not set"}
+
+    user = (
+        f"target_section: {section_path} ({section_label})\n\n"
+        + "<<<TARGET_DRAFT>>>\n"
+        + f"{target_draft or '(No draft submitted yet for this section.)'}\n"
+        + "<<<END_TARGET_DRAFT>>>\n\n"
+        + "<<<SECTIONS_SNAPSHOT>>>\n"
+        + f"{sections_snapshot}\n"
+        + "<<<END_SECTIONS_SNAPSHOT>>>\n\n"
+        + "<<<THESIS_MEMORY>>>\n"
+        + f"{thesis_memory or '(none)'}\n"
+        + "<<<END_THESIS_MEMORY>>>\n"
+    )
+    client = AsyncAnthropic(api_key=api_key)
+    try:
+        message = await client.messages.create(
+            model=model,
+            max_tokens=8192,
+            system=SECTION_SUGGESTION_SYSTEM,
+            tools=[SECTION_SUGGESTION_TOOL],
+            tool_choice={"type": "tool", "name": "return_section_suggestion"},
+            messages=[{"role": "user", "content": user}],
+        )
+        data = _tool_input_by_name(message, "return_section_suggestion")
+        if data is None:
+            raw = _text_blocks(message)
+            if raw:
+                try:
+                    obj = _parse_json_object(raw)
+                    return {"ok": True, "data": {**_empty_section_suggestion(), **obj}}
+                except json.JSONDecodeError as exc:
+                    return {"ok": False, "error": f"Section suggestion JSON fallback failed: {exc}", "raw": raw[:4000]}
+            return {"ok": False, "error": "Section suggestion: empty or missing tool"}
+        return {"ok": True, "data": data}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "data": None}
+
+
+async def chat_about_suggestion(
+    *,
+    api_key: str,
+    model: str,
+    section_path: str,
+    section_label: str,
+    suggestion: dict[str, Any],
+    user_message: str,
+    history: list[dict[str, str]],
+    thesis_context: str,
+) -> dict[str, Any]:
+    if not api_key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY is not set"}
+
+    suggestion_text = json.dumps(suggestion, ensure_ascii=False, indent=2)
+    system = (
+        "You help refine a Masters thesis section. The user is discussing a Claude-generated "
+        "writing suggestion for one binder section. Be concise and practical.\n\n"
+        f"Section: {section_path} ({section_label})\n\n"
+        f"Current suggestion:\n{suggestion_text}\n\n"
+        f"Thesis context:\n{thesis_context or '(none yet)'}\n"
+    )
+    messages: list[dict[str, str]] = []
+    for turn in history:
+        role = turn.get("role", "")
+        content = turn.get("content", "")
+        if role in ("user", "assistant") and content.strip():
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_message})
+
+    client = AsyncAnthropic(api_key=api_key)
+    try:
+        message = await client.messages.create(
+            model=model,
+            max_tokens=4096,
+            system=system,
+            messages=messages,
+        )
+        text = _text_blocks(message)
+        return {"ok": True, "text": text}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

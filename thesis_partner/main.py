@@ -21,7 +21,14 @@ from thesis_partner.binder import (
     section_label as binder_section_label,
 )
 from thesis_partner.config import Settings, get_settings
-from thesis_partner.schemas import AnalyzeRequest, AnalyzeResponse, ChatRequest, MemoryRequest
+from thesis_partner.schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    ChatRequest,
+    MemoryRequest,
+    SuggestSectionChatRequest,
+    SuggestSectionRequest,
+)
 from thesis_partner.services import claude, gptzero
 
 ROOT = Path(__file__).resolve().parent
@@ -226,6 +233,74 @@ async def theme_fit(
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result.get("error", "Claude error"))
     return JSONResponse(result)
+
+
+@app.post("/api/suggest-section")
+async def suggest_section(
+    body: SuggestSectionRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    section_path = body.section_path.strip()
+    if section_path not in VALID_SECTION_PATHS:
+        raise HTTPException(status_code=400, detail="Unknown binder section.")
+
+    row = conn.execute(
+        "SELECT text_content FROM section_drafts WHERE section_path = ?",
+        (section_path,),
+    ).fetchone()
+    target_draft = ""
+    if row and (row["text_content"] or "").strip():
+        target_draft = str(row["text_content"])
+
+    other_paths = [p for p in all_section_paths_ordered() if p != section_path]
+    sections_snapshot = build_sections_snapshot(
+        conn,
+        paths=other_paths,
+        max_chars_per_section=settings.max_theme_fit_section_chars,
+    )
+    thesis_memory = load_thesis_context(conn)
+    result = await claude.suggest_section(
+        api_key=settings.anthropic_api_key,
+        model=settings.claude_model,
+        section_path=section_path,
+        section_label=binder_section_label(section_path),
+        target_draft=target_draft,
+        sections_snapshot=sections_snapshot,
+        thesis_memory=thesis_memory,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result.get("error", "Claude error"))
+    return JSONResponse(result)
+
+
+@app.post("/api/suggest-section/chat")
+async def suggest_section_chat(
+    body: SuggestSectionChatRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    section_path = body.section_path.strip()
+    if section_path not in VALID_SECTION_PATHS:
+        raise HTTPException(status_code=400, detail="Unknown binder section.")
+    if len(body.message) > settings.max_chat_chars:
+        raise HTTPException(status_code=400, detail="Message exceeds configured limit")
+
+    thesis_context = load_thesis_context(conn)
+    history = [{"role": t.role, "content": t.content} for t in body.history]
+    result = await claude.chat_about_suggestion(
+        api_key=settings.anthropic_api_key,
+        model=settings.claude_model,
+        section_path=section_path,
+        section_label=binder_section_label(section_path),
+        suggestion=body.suggestion,
+        user_message=body.message,
+        history=history,
+        thesis_context=thesis_context,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result.get("error", "Claude error"))
+    return JSONResponse({"ok": True, "reply": str(result.get("text", ""))})
 
 
 @app.post("/api/chat")

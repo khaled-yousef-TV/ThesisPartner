@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,22 @@ class AnalyzeRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(..., max_length=16_000)
+
+
+class SuggestSectionRequest(BaseModel):
+    section_path: str = Field(..., max_length=500)
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., max_length=16_000)
+
+
+class SuggestSectionChatRequest(BaseModel):
+    section_path: str = Field(..., max_length=500)
+    message: str = Field(..., max_length=16_000)
+    suggestion: dict[str, Any]
+    history: list[ChatTurn] = Field(default_factory=list, max_length=40)
 
 
 class MemoryRequest(BaseModel):
