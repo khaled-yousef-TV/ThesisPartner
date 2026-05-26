@@ -29,7 +29,7 @@ from thesis_partner.schemas import (
     SuggestSectionChatRequest,
     SuggestSectionRequest,
 )
-from thesis_partner.services import claude, gptzero
+from thesis_partner.services import deepseek, gptzero
 
 ROOT = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
@@ -169,9 +169,9 @@ async def analyze(
         raise HTTPException(status_code=400, detail="Text exceeds configured limit")
 
     gz_task = gptzero.scan_text(settings.gptzero_api_key, body.text)
-    cl_task = claude.analyze_draft(
-        api_key=settings.anthropic_api_key,
-        model=settings.claude_model,
+    cl_task = deepseek.analyze_draft(
+        api_key=settings.deepseek_api_key,
+        model=settings.deepseek_model,
         section_path=body.section_path,
         note=body.note,
         draft=body.text,
@@ -224,9 +224,9 @@ async def theme_fit(
         max_chars_per_section=settings.max_theme_fit_section_chars,
     )
     thesis_memory = load_thesis_context(conn)
-    result = await claude.theme_fit_manuscript(
-        api_key=settings.anthropic_api_key,
-        model=settings.claude_model,
+    result = await deepseek.theme_fit_manuscript(
+        api_key=settings.deepseek_api_key,
+        model=settings.deepseek_model,
         sections_snapshot=snapshot,
         thesis_memory=thesis_memory,
     )
@@ -260,9 +260,9 @@ async def suggest_section(
         max_chars_per_section=settings.max_theme_fit_section_chars,
     )
     thesis_memory = load_thesis_context(conn)
-    result = await claude.suggest_section(
-        api_key=settings.anthropic_api_key,
-        model=settings.claude_model,
+    result = await deepseek.suggest_section(
+        api_key=settings.deepseek_api_key,
+        model=settings.deepseek_model,
         section_path=section_path,
         section_label=binder_section_label(section_path),
         target_draft=target_draft,
@@ -288,9 +288,9 @@ async def suggest_section_chat(
 
     thesis_context = load_thesis_context(conn)
     history = [{"role": t.role, "content": t.content} for t in body.history]
-    result = await claude.chat_about_suggestion(
-        api_key=settings.anthropic_api_key,
-        model=settings.claude_model,
+    result = await deepseek.chat_about_suggestion(
+        api_key=settings.deepseek_api_key,
+        model=settings.deepseek_model,
         section_path=section_path,
         section_label=binder_section_label(section_path),
         suggestion=body.suggestion,
@@ -319,9 +319,9 @@ async def chat(
     conn.commit()
 
     thesis_context = load_thesis_context(conn)
-    result = await claude.chat_turn(
-        api_key=settings.anthropic_api_key,
-        model=settings.claude_model,
+    result = await deepseek.chat_turn(
+        api_key=settings.deepseek_api_key,
+        model=settings.deepseek_model,
         user_message=body.message,
         thesis_context=thesis_context,
     )
@@ -362,9 +362,9 @@ async def refresh_brief(
         "SELECT content FROM memory_entries ORDER BY id DESC LIMIT 80"
     ).fetchall()
     block = "\n\n".join(r["content"] for r in reversed(rows))
-    result = await claude.refresh_brief(
-        api_key=settings.anthropic_api_key,
-        model=settings.claude_model,
+    result = await deepseek.refresh_brief(
+        api_key=settings.deepseek_api_key,
+        model=settings.deepseek_model,
         memory_block=block,
     )
     if not result.get("ok"):

@@ -14,7 +14,9 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     gptzero_api_key: str = ""
+    deepseek_api_key: str = ""
     claude_model: str = "claude-sonnet-4-20250514"
+    deepseek_model: str = "deepseek-chat"
 
     max_analyze_chars: int = 80_000
     max_chat_chars: int = 16_000
