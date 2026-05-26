@@ -59,18 +59,52 @@ async def _chat(
 
 
 def _parse_json_response(text: str) -> dict[str, Any]:
-    """Extract JSON from a model response, handling code fences."""
+    """Extract JSON from a model response, with repair attempts for common LLM errors."""
     s = text.strip()
+
+    # Remove code fences
     if s.startswith("```"):
         s = _re.sub(r"^```[a-zA-Z0-9]*\s*\n", "", s)
         s = _re.sub(r"\n```\s*$", "", s).strip()
+
+    # Try direct parse first
     try:
         return _json.loads(s)
     except _json.JSONDecodeError:
-        m = _re.search(r"\{[\s\S]*\}", s)
-        if m:
-            return _json.loads(m.group(0))
-        raise
+        pass
+
+    # Try to find a JSON object with regex
+    m = _re.search(r"\{[\s\S]*\}", s)
+    if m:
+        candidate = m.group(0)
+        try:
+            return _json.loads(candidate)
+        except _json.JSONDecodeError:
+            pass
+
+        # ---- Repair attempts (safest first) ----
+        repaired = candidate
+
+        # 1. Remove trailing commas before ] or }
+        repaired = _re.sub(r",\s*([}\]])", r"\1", repaired)
+
+        try:
+            return _json.loads(repaired)
+        except _json.JSONDecodeError:
+            pass
+
+        # 2. Try stripping everything before first { and after last }
+        start = repaired.find("{")
+        end = repaired.rfind("}") + 1
+        if start >= 0 and end > start:
+            stripped = repaired[start:end]
+            stripped = _re.sub(r",\s*([}\]])", r"\1", stripped)
+            try:
+                return _json.loads(stripped)
+            except _json.JSONDecodeError:
+                pass
+
+    raise _json.JSONDecodeError(f"Could not parse JSON from: {s[:500]}", s, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -144,10 +178,11 @@ async def theme_fit_manuscript(
 
     system = (
         "You are a thesis argument coach. Review the manuscript snapshot for thematic coherence.\n"
-        "Return a JSON object: {\"theme\": {\"summary\": str, \"strengths\": [str], "
-        "\"gaps\": [str], \"suggestions\": [str]}, \"sectionNotes\": str}.\n"
-        "Ground all observations in visible text. If content is sparse, say so. "
-        "Return ONLY valid JSON, no commentary."
+        "Return a valid JSON object with exactly this structure:\n"
+        '{"theme": {"summary": "...", "strengths": ["..."], "gaps": ["..."], "suggestions": ["..."]}, "sectionNotes": "..."}\n'
+        "Ground observations in visible text. If content is sparse, say so.\n"
+        "IMPORTANT: Ensure the JSON is strictly valid — escape any quotes inside string values with backslash, "
+        "do not use trailing commas, and close all brackets. Return ONLY the JSON object, no markdown fences."
     )
 
     user = (
@@ -178,7 +213,16 @@ async def theme_fit_manuscript(
             },
         }
     except (_json.JSONDecodeError, KeyError) as exc:
-        return {"ok": False, "error": f"Theme fit parse failed: {exc}", "data": None}
+        # Fallback: return raw text as sectionNotes so user still sees something
+        raw = result.get("text", "")
+        return {
+            "ok": True,
+            "data": {
+                "theme": {"summary": f"(Parse error — see sectionNotes for raw response)", "strengths": [], "gaps": [], "suggestions": []},
+                "sectionNotes": raw[:4000],
+            },
+            "parse_error": str(exc),
+        }
 
 
 # ---------------------------------------------------------------------------
